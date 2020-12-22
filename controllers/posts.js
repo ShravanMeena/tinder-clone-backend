@@ -1,8 +1,14 @@
 import mongoose from "mongoose";
 import PostMessage from "../models/postMessage.js";
 import UserMessage from "../models/userMessage.js";
+import { userRegistrationValidation, loginValidation } from "../validation.js";
 
-import Joi from "@hapi/joi";
+import bcrypt from "bcryptjs";
+import jwt from "jsonwebtoken";
+
+import dotenv from "dotenv";
+
+dotenv.config();
 
 // also called handlers/controllers
 export const getPosts = (req, res) => {
@@ -13,6 +19,16 @@ export const getPosts = (req, res) => {
       res.status(200).send(data);
     }
   });
+};
+
+// get post with id
+export const getPost = async (req, res) => {
+  const { id } = req.params;
+
+  if (!mongoose.Types.ObjectId.isValid(id))
+    return res.status(404).json(`No post with id: ${id}`);
+  const data = await PostMessage.findById(id);
+  res.json(data);
 };
 
 // create
@@ -75,20 +91,45 @@ export const likePost = async (req, res) => {
   res.json(updatedPost);
 };
 
-// user
-const schema = Joi.object({
-  name: Joi.string().min(3).required(),
-  email: Joi.string().min(4).required().email(),
-  password: Joi.string().min(6).required(),
-});
+// create comment or update like(not working...)
+export const commentPost = async (req, res) => {
+  const { id } = req.params;
+  const post = req.body;
+  // their is post mean {creator, title, message, tags, selectedFile}
 
-// create
+  if (!mongoose.Types.ObjectId.isValid(id))
+    return res.status(404).send(`No post with id: ${id}`);
+
+  const updatedPost = { ...post, _id: id };
+
+  await PostMessage.findByIdAndUpdate(id, updatedPost, { new: true });
+
+  res.json(updatedPost);
+};
+
+// user
+
+// register user
 export const createUser = async (req, res) => {
   // validate a user before we create a user
-  const { error } = schema.validate(req.body);
-  res.send(error);
-  const user = req.body;
+  const { error } = userRegistrationValidation(req.body);
+  if (error) return res.status(400).send(error.details[0].message);
 
+  // check if the user already registerd or not
+  const emailExist = await UserMessage.findOne({ email: req.body.email });
+  if (emailExist) return res.status(400).send("Email already exist");
+
+  // hash password
+  var salt = await bcrypt.genSalt(10);
+
+  var hash = await bcrypt.hash(req.body.password, salt);
+
+  // create a user
+  const user = new UserMessage({
+    name: req.body.name,
+    email: req.body.email,
+    password: hash,
+  });
   await UserMessage.create(user, (err, data) => {
     if (err) {
       res.status(500).send(err);
@@ -98,13 +139,22 @@ export const createUser = async (req, res) => {
   });
 };
 
-// get user
-export const getUser = (req, res) => {
-  UserMessage.find((err, data) => {
-    if (err) {
-      res.status(500).send(err);
-    } else {
-      res.status(200).send(data);
-    }
-  });
+// login user
+export const loginUser = async (req, res) => {
+  // validate a user before we create a user
+  const { error } = loginValidation(req.body);
+  if (error) return res.status(400).send(error.details[0].message);
+
+  // check if the user already registerd or not /email exist or ot
+  const user = await UserMessage.findOne({ email: req.body.email });
+  if (!user) return res.status(400).send("Email is not found");
+
+  // check if the user already registerd or not /password exist or ot
+  const validPass = await bcrypt.compare(req.body.password, user.password);
+  if (!validPass) return res.status(400).send("password is wrong");
+
+  // create and send token
+  var token = jwt.sign({ _id: user._id }, process.env.SECRET_TOKEN);
+  res.header("auth-token", token).send(token);
+  res.send("logged in succesfully");
 };
